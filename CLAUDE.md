@@ -18,5 +18,5 @@ No server, no bank connection. Currency CHF.
 
 ## Roadmap
 - V1: add/edit/delete transactions, categories, home summary, search/filters, month arrows. (done)
-- V2: recurring payments, monthly budgets per category, custom month start day.
+- V2: recurring payments (auto-added on open), monthly budgets per category, custom month start day. (done)
 - V3: charts, savings goals, JSON/CSV export + import, optional 4-digit PIN.

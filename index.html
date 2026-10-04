@@ -47,6 +47,7 @@ h2 small{font-weight:500;color:var(--faint)}
 .mnav{display:flex;align-items:center;gap:8px;margin:0 0 14px}
 .mnav span{flex:1;text-align:center;font-weight:600;font-size:16px}
 .mnav .icon{width:38px;height:38px}
+.mnav .sub{display:block;font-size:12px;font-weight:500;color:var(--muted)}
 .mnav .today{border:0;background:var(--surface);border-radius:999px;padding:6px 12px;font-size:13px;font-weight:600}
 
 /* home */
@@ -85,11 +86,12 @@ h2 small{font-weight:500;color:var(--faint)}
 .empty b{display:block;font-size:18px;color:var(--ink);margin-bottom:4px}
 .filters{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px}
 .filters .inp.q{grid-column:1/-1}
-.catbar{display:flex;align-items:center;gap:12px;padding:12px 16px}
+.catbar{width:100%;border:0;background:none;text-align:left;display:flex;align-items:center;gap:12px;padding:12px 16px}
 .catbar+.catbar{box-shadow:inset 0 1px 0 var(--line)}
 .cbm{flex:1;min-width:0}
 .cbm .l{display:flex;justify-content:space-between;gap:8px;font-weight:600}
 .cbm .l span:last-child{font-family:var(--display);font-size:20px;font-variant-numeric:tabular-nums}
+.bsub{font-size:12px;color:var(--muted);margin-top:4px}
 .cbm .pbar{margin-top:6px;height:6px}
 
 /* fab + tabs */
@@ -106,6 +108,9 @@ nav.tabs{position:fixed;left:0;right:0;bottom:0;background:var(--bg);box-shadow:
 .inp{width:100%;height:46px;border:0;background:var(--sunk);border-radius:12px;padding:0 14px}
 select.inp{appearance:none;-webkit-appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 20px) 20px,calc(100% - 15px) 20px;background-size:5px 5px;background-repeat:no-repeat;padding-right:34px}
 input[type=date].inp{color-scheme:inherit}
+.upc{display:flex;align-items:center;gap:12px;padding:11px 16px}
+.upc+.upc{box-shadow:inset 0 1px 0 var(--line)}
+.upc .dd{flex:none;width:52px;font-size:13px;color:var(--muted);font-weight:600}
 .sheet{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:5;display:flex;align-items:flex-end;justify-content:center;opacity:0;visibility:hidden;transition:opacity .2s,visibility 0s .25s}
 .sheet.on{opacity:1;visibility:visible;transition:opacity .2s}
 .sheet.s2{z-index:6}
@@ -188,7 +193,10 @@ function load(){
 // Add a block per format change: if(d.v < 2){ ...; d.v = 2; }
 function migrate(d){
   if(!d.v) d.v = 1;
-  d.settings = Object.assign({theme:"auto"}, d.settings);
+  if(d.v < 2){ d.rec = d.rec || []; d.budgets = d.budgets || {}; d.v = 2; }
+  d.settings = Object.assign({theme:"auto", startDay:1}, d.settings);
+  if(!Array.isArray(d.rec)) d.rec = [];
+  if(!d.budgets || typeof d.budgets !== "object") d.budgets = {};
   if(!Array.isArray(d.cats) || !d.cats.length) d.cats = DEF_CATS.map(c => Object.assign({}, c));
   if(!Array.isArray(d.tx)) d.tx = [];
   return d;
@@ -218,7 +226,46 @@ function dayLabel(ds){
 }
 const catOf = id => S.cats.find(c => c.id === id) || S.cats.find(c => c.id === "other") || {id:"other", name:"Autre", emoji:"✨", color:"#8E8E93"};
 const methodName = id => (METHODS.find(m => m.id === id) || METHODS[0]).name;
-const inMonth = (t, ym) => t.date.slice(0, 7) === ym; // V2: replaced by the custom month start day
+const sd = () => S.settings.startDay || 1;
+// a "month" runs from day startDay of ym to the day before startDay of the next month
+const monthStart = ym => ym + "-" + pad(sd());
+const monthEnd = ym => shiftMonth(ym, 1) + "-" + pad(sd()); // exclusive
+const inMonth = (t, ym) => t.date >= monthStart(ym) && t.date < monthEnd(ym);
+function curYm(){ const t = today(); return +t.slice(8) < sd() ? shiftMonth(t.slice(0, 7), -1) : t.slice(0, 7); }
+const shortDate = ds => { const [y, m, d] = ds.split("-").map(Number); return new Date(y, m-1, d).toLocaleDateString("fr-CH", {day:"numeric", month:"short"}); };
+function periodLabel(ym){
+  const e = new Date(monthEnd(ym) + "T00:00:00"); e.setDate(e.getDate() - 1);
+  return shortDate(monthStart(ym)) + " – " + shortDate(ymd(e));
+}
+const EVERY = {week:"Chaque semaine", month:"Chaque mois", year:"Chaque année"};
+function addPeriod(ds, every, anchor){
+  const [y, m, d] = ds.split("-").map(Number);
+  if(every === "week") return ymd(new Date(y, m-1, d + 7));
+  const i = m - 1 + (every === "year" ? 12 : 1), Y = y + Math.floor(i / 12), M = i % 12;
+  return Y + "-" + pad(M + 1) + "-" + pad(Math.min(anchor || d, new Date(Y, M + 1, 0).getDate()));
+}
+// adds every recurring payment that is due; returns how many were added
+function runRec(){
+  const td = today(); let n = 0;
+  for(const r of S.rec){
+    let guard = 0;
+    while(r.next <= td && guard++ < 400){
+      S.tx.push({id:uid(), ts:Date.now() + n, type:r.type, amount:r.amount, cat:r.cat, date:r.next, method:r.method, note:r.name, rec:r.id});
+      r.next = addPeriod(r.next, r.every, r.day); n++;
+    }
+  }
+  if(n) save();
+  return n;
+}
+function upcoming(days){
+  const td = today(), lim = new Date(); lim.setDate(lim.getDate() + days);
+  const end = ymd(lim), out = [];
+  for(const r of S.rec){
+    let d = r.next, g = 0;
+    while(d <= end && g++ < 100){ if(d >= td) out.push({r, d}); d = addPeriod(d, r.every, r.day); }
+  }
+  return out.sort((a, b) => a.d.localeCompare(b.d));
+}
 const monthTx = ym => S.tx.filter(t => inMonth(t, ym));
 const sortTx = a => a.sort((x, y) => y.date.localeCompare(x.date) || (y.ts || 0) - (x.ts || 0));
 function totals(list){
@@ -230,7 +277,7 @@ const tint = c => c + "2E";
 
 /* ---------- state ---------- */
 let tab = "home";
-let cur = today().slice(0, 7);
+let cur = curYm();
 const filt = {q:"", cat:"", method:""};
 const TABS = ["home", "tx", "bud", "more"];
 
@@ -255,9 +302,9 @@ function toast(msg, undo){
 
 /* ---------- views ---------- */
 function monthNav(){
-  const isNow = cur === today().slice(0, 7);
+  const isNow = cur === curYm();
   return '<div class="mnav"><button class="icon" data-m="-1" aria-label="Mois précédent"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>' +
-    '<span>' + monthLabel(cur) + '</span>' +
+    '<span>' + monthLabel(cur) + (sd() > 1 ? '<small class="sub">' + periodLabel(cur) + '</small>' : '') + '</span>' +
     (isNow ? "" : '<button class="today" data-m="0">Ce mois</button>') +
     '<button class="icon" data-m="1" aria-label="Mois suivant"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button></div>';
 }
@@ -270,11 +317,19 @@ function txRow(t){
     '<span class="rname"><b>' + title + '</b><span>' + sub + '</span></span>' +
     '<span class="rval ' + (t.type === "inc" ? "inc" : "") + '">' + (t.type === "inc" ? "+" : "−") + money(t.amount) + '</span></button></div>';
 }
+function upcList(days){
+  const u = upcoming(days);
+  if(!u.length) return "";
+  return '<div class="list">' + u.map(x => {
+    const c = catOf(x.r.cat);
+    return '<div class="upc"><span class="dd">' + shortDate(x.d) + '</span><span class="emo" style="background:' + tint(c.color) + '">' + esc(c.emoji) + '</span><span class="rname"><b>' + esc(x.r.name) + '</b><span>' + EVERY[x.r.every] + '</span></span><span class="rval ' + (x.r.type === "inc" ? "inc" : "") + '">' + (x.r.type === "inc" ? "+" : "−") + money(x.r.amount) + '</span></div>';
+  }).join("") + '</div>';
+}
 const emptyBox = (t, s) => '<div class="empty"><b>' + t + '</b>' + s + '</div>';
 
 function viewHome(){
   const list = monthTx(cur), T = totals(list);
-  const isNow = cur === today().slice(0, 7);
+  const isNow = cur === curYm();
   const last = sortTx(list.slice()).slice(0, 5);
   const label = T.bal >= 0 ? (isNow ? "Il te reste ce mois" : "Solde du mois") : (isNow ? "Tu as dépassé de" : "Solde du mois");
   const shown = T.bal >= 0 ? T.bal : Math.abs(T.bal);
@@ -288,7 +343,8 @@ function viewHome(){
     '<div class="stat inc"><b>' + money(T.inc) + '</b><span>Revenus (CHF)</span></div></div>' +
     '<h2>Dernières transactions' + (list.length > 5 ? '<small>' + list.length + ' ce mois</small>' : '') + '</h2>' +
     (last.length ? '<div class="list">' + last.map(txRow).join("") + '</div>' :
-      emptyBox("Rien ce mois-ci", "Appuie sur + pour ajouter ta première transaction."));
+      emptyBox("Rien ce mois-ci", "Appuie sur + pour ajouter ta première transaction.")) +
+    (isNow && upcoming(30).length ? '<h2>À venir<small>30 prochains jours</small></h2>' + upcList(30) : '');
 }
 
 function viewTx(){
@@ -322,16 +378,25 @@ function viewBud(){
   const list = monthTx(cur).filter(t => t.type !== "inc");
   const by = {};
   for(const t of list) by[t.cat] = (by[t.cat] || 0) + cents(t.amount);
-  const rows = Object.keys(by).map(id => ({c: catOf(id), v: by[id]/100})).sort((a, b) => b.v - a.v);
-  const max = rows.length ? rows[0].v : 1;
+  const rows = S.cats.map(c => ({c, v:(by[c.id] || 0)/100, b:S.budgets[c.id] || 0}));
+  for(const id in by) if(!S.cats.some(c => c.id === id)) rows.push({c:catOf(id), v:by[id]/100, b:0});
+  rows.sort((a, b) => (b.b > 0) - (a.b > 0) || b.v - a.v);
+  const withB = rows.filter(r => r.b > 0);
+  const tb = withB.reduce((a, r) => a + cents(r.b), 0) / 100, ts = withB.reduce((a, r) => a + cents(r.v), 0) / 100;
   const total = totals(list).exp;
+  const row = r => {
+    const pct = r.b ? r.v / r.b : 0;
+    const col = !r.b ? r.c.color : pct > 1 ? "var(--red)" : pct >= .8 ? "var(--amber)" : r.c.color;
+    const right = r.b ? '<span' + (pct > 1 ? ' style="color:var(--red)"' : '') + '>' + money(r.v) + ' / ' + money(r.b) + '</span>' : '<span>' + (r.v ? money(r.v) : '<span class="muted" style="font-size:14px;font-family:var(--body)">Définir</span>') + '</span>';
+    const sub = r.b ? (pct > 1 ? '<div class="bsub" style="color:var(--red)">Dépassé de ' + money(Math.round((r.v - r.b) * 100) / 100) + ' CHF</div>' : '<div class="bsub">Il reste ' + money(Math.round((r.b - r.v) * 100) / 100) + ' CHF</div>') : '';
+    return '<button class="catbar" data-bud="' + esc(r.c.id) + '"><span class="emo" style="background:' + tint(r.c.color) + '">' + esc(r.c.emoji) + '</span><div class="cbm"><div class="l"><span>' + esc(r.c.name) + '</span>' + right + '</div>' +
+      '<div class="pbar"><i style="width:' + (r.b ? Math.min(100, pct * 100) : (total ? r.v / total * 100 : 0)) + '%;background:' + col + '"></i></div>' + sub + '</div></button>';
+  };
   return '<div class="top"><h1>Budgets</h1></div>' + monthNav() +
-    '<h2>Dépenses par catégorie<small>' + money(total) + ' CHF</small></h2>' +
-    (rows.length ? '<div class="list">' + rows.map(r =>
-      '<div class="catbar"><span class="emo" style="background:' + tint(r.c.color) + '">' + esc(r.c.emoji) + '</span><div class="cbm"><div class="l"><span>' + esc(r.c.name) + '</span><span>' + money(r.v) + '</span></div>' +
-      '<div class="pbar"><i style="width:' + (r.v / max * 100) + '%;background:' + r.c.color + '"></i></div></div></div>').join("") + '</div>'
-      : emptyBox("Aucune dépense", "Rien à afficher pour ce mois.")) +
-    '<p class="note">Les budgets par catégorie arrivent dans la prochaine version.</p>';
+    (withB.length ? '<div class="card"><div class="muted" style="font-size:14px">Budget total du mois</div><div class="big" style="font-size:52px;margin-top:2px">' + money(ts) + '<small style="font-size:22px">/ ' + money(tb) + ' CHF</small></div></div>' : '') +
+    '<h2>Par catégorie<small>' + money(total) + ' CHF dépensés</small></h2>' +
+    '<div class="list">' + rows.map(row).join("") + '</div>' +
+    '<p class="note">Touche une catégorie pour fixer son budget mensuel. La barre devient jaune à 80 % et rouge au-delà de 100 %.</p>';
 }
 
 function viewMore(){
@@ -339,6 +404,12 @@ function viewMore(){
   return '<div class="top"><h1>Plus</h1></div>' +
     '<h2>Apparence</h2><div class="seg" id="themeSeg">' +
     [["auto", "Comme le téléphone"], ["light", "Clair"], ["dark", "Sombre"]].map(a => '<button data-th="' + a[0] + '" aria-pressed="' + (th === a[0]) + '">' + a[1] + '</button>').join("") + '</div>' +
+    '<h2>Mon mois commence le</h2><select class="inp" id="sdsel">' + Array.from({length:28}, (_, k) => '<option value="' + (k+1) + '"' + (sd() === k+1 ? " selected" : "") + '>' + (k === 0 ? "1er du mois (calendrier)" : (k+1) + " du mois") + '</option>').join("") + '</select>' +
+    '<p class="note">Utile si tu reçois ton argent de poche ou ton salaire un autre jour : les totaux, budgets et mois suivent cette date.</p>' +
+    '<h2>Paiements récurrents</h2><div class="list">' +
+    S.rec.map(r => { const c = catOf(r.cat); return '<button class="row" data-rec="' + esc(r.id) + '"><span class="emo" style="background:' + tint(c.color) + '">' + esc(c.emoji) + '</span><span class="rname"><b>' + esc(r.name) + '</b><span>' + EVERY[r.every] + ' · prochain ' + shortDate(r.next) + '</span></span><span class="rval ' + (r.type === "inc" ? "inc" : "") + '">' + (r.type === "inc" ? "+" : "−") + money(r.amount) + '</span></button>'; }).join("") +
+    '<button class="row" data-rec="new"><span class="emo" style="background:var(--sunk)">+</span><span class="rname"><b>Nouveau paiement récurrent</b></span></button></div>' +
+    (upcoming(30).length ? '<h2>À venir<small>30 prochains jours</small></h2>' + upcList(30) : '') +
     '<h2>Catégories</h2><div class="list">' +
     S.cats.map(c => '<button class="row" data-cat="' + esc(c.id) + '"><span class="emo" style="background:' + tint(c.color) + '">' + esc(c.emoji) + '</span><span class="rname"><b>' + esc(c.name) + '</b></span><span class="muted">›</span></button>').join("") +
     '<button class="row" data-cat="new"><span class="emo" style="background:var(--sunk)">+</span><span class="rname"><b>Nouvelle catégorie</b></span></button></div>' +
@@ -360,13 +431,17 @@ document.querySelector("nav.tabs").addEventListener("click", e => {
 $("#fab").onclick = () => openTx();
 $("#view").addEventListener("click", e => {
   const m = e.target.closest("[data-m]");
-  if(m){ cur = m.dataset.m === "0" ? today().slice(0, 7) : shiftMonth(cur, +m.dataset.m); render(); return; }
+  if(m){ cur = m.dataset.m === "0" ? curYm() : shiftMonth(cur, +m.dataset.m); render(); return; }
   const ed = e.target.closest("[data-edit]");
   if(ed){ if(swiped) return; openTx(ed.dataset.edit); return; }
   const th = e.target.closest("[data-th]");
   if(th){ S.settings.theme = th.dataset.th; save(); applyTheme(); render(); return; }
   const ct = e.target.closest("[data-cat]");
-  if(ct) openCat(ct.dataset.cat);
+  if(ct){ openCat(ct.dataset.cat); return; }
+  const rc = e.target.closest("[data-rec]");
+  if(rc){ openRec(rc.dataset.rec); return; }
+  const bd = e.target.closest("[data-bud]");
+  if(bd) openBud(bd.dataset.bud);
 });
 $("#view").addEventListener("input", e => {
   if(e.target.id === "fq"){ filt.q = e.target.value; fillTxList(); }
@@ -374,6 +449,7 @@ $("#view").addEventListener("input", e => {
 $("#view").addEventListener("change", e => {
   if(e.target.id === "fc"){ filt.cat = e.target.value; fillTxList(); }
   if(e.target.id === "fm"){ filt.method = e.target.value; fillTxList(); }
+  if(e.target.id === "sdsel"){ S.settings.startDay = +e.target.value; save(); cur = curYm(); render(); }
 });
 
 /* swipe left to delete */
@@ -523,16 +599,97 @@ $("#sb2").addEventListener("click", e => {
     if(n && !confirm(n + " transaction" + (n > 1 ? "s seront déplacées" : " sera déplacée") + " vers « Autre ». Supprimer la catégorie ?")) return;
     if(!S.cats.some(c => c.id === "other")) S.cats.push({id:"other", name:"Autre", emoji:"✨", color:"#8E8E93"});
     S.tx.forEach(t => { if(t.cat === CF.id) t.cat = "other"; });
+    S.rec.forEach(r => { if(r.cat === CF.id) r.cat = "other"; });
+    delete S.budgets[CF.id];
     S.cats = S.cats.filter(c => c.id !== CF.id);
     save(); closeCat(); render();
   }
 });
-$("#sb2").addEventListener("keydown", e => { if(e.key === "Enter" && e.target.tagName === "INPUT"){ e.preventDefault(); $("#csave").click(); } });
+$("#sb2").addEventListener("keydown", e => { if(e.key === "Enter" && e.target.tagName === "INPUT"){ e.preventDefault(); (document.querySelector("#csave,#rsave,#bsave") || {click(){}}).click(); } });
 $("#sh2").addEventListener("click", e => { if(e.target.id === "sh2") closeCat(); });
+
+/* ---------- recurring + budget sheets ---------- */
+let RF = null;
+function openRec(id){
+  const r = id === "new" ? {id:null, type:"exp", name:"", amount:"", cat:"subs", method:"card", every:"month", next:today()} : S.rec.find(x => x.id === id);
+  if(!r) return;
+  RF = Object.assign({}, r, {amount:r.amount ? String(r.amount) : ""});
+  renderRec();
+  $("#sh2").classList.add("on");
+}
+function readRec(){
+  if(!$("#rname")) return;
+  RF.name = $("#rname").value; RF.amount = $("#ramt").value;
+  RF.cat = $("#rcat").value; RF.method = $("#rmeth").value; RF.every = $("#revery").value; RF.next = $("#rnext").value;
+}
+function renderRec(){
+  const inc = RF.type === "inc";
+  $("#sb2").innerHTML =
+    '<h3>' + (RF.id ? "Paiement récurrent" : "Nouveau paiement récurrent") + '</h3>' +
+    '<div class="seg"><button data-rtype="exp" aria-pressed="' + !inc + '">Dépense</button><button data-rtype="inc" aria-pressed="' + inc + '">Revenu</button></div>' +
+    '<span class="fl">Nom</span><input class="inp" id="rname" maxlength="40" placeholder="Ex. Spotify, argent de poche" value="' + esc(RF.name) + '">' +
+    '<span class="fl">Montant (CHF)</span><input class="inp" id="ramt" inputmode="decimal" placeholder="0" value="' + esc(RF.amount.replace(".", ",")) + '">' +
+    '<span class="fl">Répétition</span><select class="inp" id="revery">' + Object.keys(EVERY).map(k => '<option value="' + k + '"' + (RF.every === k ? " selected" : "") + '>' + EVERY[k] + '</option>').join("") + '</select>' +
+    '<span class="fl">Prochaine date</span><input class="inp" type="date" id="rnext" value="' + RF.next + '">' +
+    '<div class="two"><div><span class="fl">Catégorie</span><select class="inp" id="rcat">' + S.cats.map(c => '<option value="' + esc(c.id) + '"' + (RF.cat === c.id ? " selected" : "") + '>' + esc(c.emoji + " " + c.name) + '</option>').join("") + '</select></div>' +
+    '<div><span class="fl">Paiement</span><select class="inp" id="rmeth">' + METHODS.map(m => '<option value="' + m.id + '"' + (RF.method === m.id ? " selected" : "") + '>' + m.name + '</option>').join("") + '</select></div></div>' +
+    '<p class="note">Quand la date arrive, le paiement est ajouté tout seul à tes transactions à l\'ouverture de l\'app. Si la date est déjà passée, il sera ajouté tout de suite.</p>' +
+    '<div class="sfoot">' + (RF.id ? '<button class="btn danger" id="rdel">Supprimer</button>' : '<button class="btn sec" id="rcancel">Annuler</button>') + '<button class="btn" id="rsave">Enregistrer</button></div>';
+}
+function saveRec(){
+  readRec();
+  const amount = Math.round(parseFloat(RF.amount.replace(",", ".")) * 100) / 100;
+  const name = RF.name.trim();
+  if(!name){ $("#rname").focus(); return; }
+  if(!(amount > 0)){ $("#ramt").focus(); return; }
+  if(!RF.next) RF.next = today();
+  const rec = {type:RF.type, name, amount, cat:RF.cat, method:RF.method, every:RF.every, next:RF.next, day:+RF.next.slice(8)};
+  if(RF.id) Object.assign(S.rec.find(x => x.id === RF.id), rec); else S.rec.push(Object.assign({id:uid()}, rec));
+  const n = runRec();
+  save(); closeCat(); render();
+  toast(n ? n + " paiement" + (n > 1 ? "s ajoutés" : " ajouté") + " aux transactions" : "Enregistré");
+}
+function delRec(){
+  const i = S.rec.findIndex(x => x.id === RF.id); if(i < 0) return;
+  const r = S.rec.splice(i, 1)[0];
+  save(); closeCat(); render();
+  toast("Paiement récurrent supprimé", () => { S.rec.push(r); save(); render(); });
+}
+let BF = null;
+function openBud(id){
+  const c = catOf(id), cur0 = S.budgets[id];
+  BF = id;
+  $("#sb2").innerHTML =
+    '<h3>Budget · ' + esc(c.emoji + " " + c.name) + '</h3>' +
+    '<span class="fl">Montant par mois (CHF)</span><input class="inp" id="bamt" inputmode="decimal" placeholder="Ex. 100" value="' + (cur0 ? String(cur0).replace(".", ",") : "") + '">' +
+    '<div class="sfoot">' + (cur0 ? '<button class="btn danger" id="bdel">Retirer</button>' : '<button class="btn sec" id="bcancel">Annuler</button>') + '<button class="btn" id="bsave">Enregistrer</button></div>';
+  $("#sh2").classList.add("on");
+  setTimeout(() => $("#bamt") && $("#bamt").focus(), 320);
+}
+$("#sb2").addEventListener("click", e => {
+  const b = e.target.closest("button"); if(!b) return;
+  if(b.dataset.rtype){ readRec(); RF.type = b.dataset.rtype; renderRec(); }
+  else if(b.id === "rsave") saveRec();
+  else if(b.id === "rcancel") closeCat();
+  else if(b.id === "rdel") delRec();
+  else if(b.id === "bcancel") closeCat();
+  else if(b.id === "bdel"){ delete S.budgets[BF]; save(); closeCat(); render(); }
+  else if(b.id === "bsave"){
+    const v = Math.round(parseFloat($("#bamt").value.replace(",", ".")) * 100) / 100;
+    if(!(v > 0)){ $("#bamt").focus(); return; }
+    S.budgets[BF] = v; save(); closeCat(); render();
+  }
+});
 
 /* ---------- start ---------- */
 applyTheme();
+function autoRec(){
+  const n = runRec();
+  if(n){ cur = curYm(); render(); toast(n + " paiement" + (n > 1 ? "s récurrents ajoutés" : " récurrent ajouté")); }
+}
+autoRec();
 render();
+document.addEventListener("visibilitychange", () => { if(!document.hidden && !F) autoRec(); });
 if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>
 </body>
