@@ -104,6 +104,35 @@ nav.tabs{position:fixed;left:0;right:0;bottom:0;background:var(--bg);box-shadow:
 .navbtn svg{width:23px;height:23px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .navbtn[aria-current="page"]{color:var(--ink)}
 
+/* charts + goals + lock */
+.chartcard{background:var(--surface);border-radius:var(--r);padding:16px}
+.donutw{position:relative;width:170px;height:170px;margin:0 auto 10px}
+.donutw svg{width:100%;height:100%}
+.donutw .mid{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:var(--display);font-weight:700;font-size:30px;line-height:1}
+.donutw .mid small{font-family:var(--body);font-weight:500;font-size:12px;color:var(--muted);margin-top:3px}
+.leg{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:14px}
+.leg i{flex:none;width:10px;height:10px;border-radius:50%}
+.leg span:nth-child(2){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.leg b{font-family:var(--display);font-size:18px;font-variant-numeric:tabular-nums}
+.leg em{font-style:normal;color:var(--muted);width:40px;text-align:right;font-size:13px}
+.bars{display:block;width:100%;height:auto}
+.goal{width:100%;border:0;background:none;text-align:left;display:block;padding:13px 16px}
+.goal+.goal{box-shadow:inset 0 1px 0 var(--line)}
+.goal:active{background:var(--sunk)}
+.goal .l{display:flex;justify-content:space-between;gap:8px;font-weight:600}
+.goal .l span:last-child{font-family:var(--display);font-size:20px;font-variant-numeric:tabular-nums}
+.goal .pbar{margin-top:8px}
+.goal .bsub{margin-top:5px}
+.addm{display:flex;gap:8px}
+.addm .btn{flex:none;padding:0 18px;height:46px;font-size:15px}
+.lock{position:fixed;inset:0;z-index:20;background:var(--bg);display:none;align-items:center;justify-content:center;padding:20px}
+.lock.on{display:flex}
+.lin{width:100%;max-width:320px;text-align:center}
+.lin h2{display:block;margin:0 0 18px;font-family:var(--display);font-size:32px;color:var(--ink)}
+.dots{display:flex;justify-content:center;gap:16px;margin-bottom:26px}
+.dots i{width:16px;height:16px;border-radius:50%;border:2px solid var(--faint)}
+.dots i.on{background:var(--ink);border-color:var(--ink)}
+.lin .pad button:disabled{visibility:hidden}
 /* sheets */
 .inp{width:100%;height:46px;border:0;background:var(--sunk);border-radius:12px;padding:0 14px}
 select.inp{appearance:none;-webkit-appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 20px) 20px,calc(100% - 15px) 20px;background-size:5px 5px;background-repeat:no-repeat;padding-right:34px}
@@ -162,6 +191,9 @@ input[type=date].inp{color-scheme:inherit}
 </div></nav>
 <div class="sheet" id="sh1"><div class="sbox" id="sb1"></div></div>
 <div class="sheet s2" id="sh2"><div class="sbox" id="sb2"></div></div>
+<div class="lock" id="lock"><div class="lin"><h2 id="lt">Code PIN</h2><div class="dots" id="ldots"><i></i><i></i><i></i><i></i></div>
+  <div class="pad" id="lpad"></div><button class="textlink" id="lcancel" style="display:none;margin:10px auto 0;background:none;border:0;color:var(--muted);font-size:15px;padding:8px">Annuler</button></div></div>
+<input type="file" id="impfile" accept=".json,application/json" hidden>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -194,7 +226,9 @@ function load(){
 function migrate(d){
   if(!d.v) d.v = 1;
   if(d.v < 2){ d.rec = d.rec || []; d.budgets = d.budgets || {}; d.v = 2; }
-  d.settings = Object.assign({theme:"auto", startDay:1}, d.settings);
+  if(d.v < 3){ d.goals = d.goals || []; d.v = 3; }
+  d.settings = Object.assign({theme:"auto", startDay:1, pin:""}, d.settings);
+  if(!Array.isArray(d.goals)) d.goals = [];
   if(!Array.isArray(d.rec)) d.rec = [];
   if(!d.budgets || typeof d.budgets !== "object") d.budgets = {};
   if(!Array.isArray(d.cats) || !d.cats.length) d.cats = DEF_CATS.map(c => Object.assign({}, c));
@@ -374,6 +408,29 @@ function fillTxList(){
   }).join("");
 }
 
+function donut(rows, total){
+  let off = 25;
+  const segs = rows.filter(r => r.v > 0).map(r => {
+    const p = r.v / total * 100;
+    const el = '<circle cx="21" cy="21" r="15.9155" fill="none" stroke="' + r.c.color + '" stroke-width="5" stroke-dasharray="' + p + ' ' + (100 - p) + '" stroke-dashoffset="' + off + '"/>';
+    off -= p; return el;
+  }).join("");
+  return '<svg viewBox="0 0 42 42" role="img" aria-label="Dépenses par catégorie"><circle cx="21" cy="21" r="15.9155" fill="none" style="stroke:var(--sunk)" stroke-width="5"/>' + segs + '</svg>';
+}
+function barsChart(){
+  const ms = [-5, -4, -3, -2, -1, 0].map(k => shiftMonth(cur, k));
+  const vals = ms.map(ym => totals(S.tx.filter(t => t.type !== "inc" && inMonth(t, ym))).exp);
+  const max = Math.max(1, ...vals);
+  const bars = ms.map((ym, i) => {
+    const h = Math.max(vals[i] ? 3 : 1, vals[i] / max * 96), x = 12 + i * 48, y = 122 - h;
+    const [Y, M] = ym.split("-").map(Number);
+    const lab = new Date(Y, M - 1, 1).toLocaleDateString("fr-CH", {month:"short"}).replace(".", "");
+    return '<rect x="' + x + '" y="' + y + '" width="30" height="' + h + '" rx="6" style="fill:' + (i === 5 ? "var(--ink)" : "var(--raise)") + '"/>' +
+      (vals[i] ? '<text x="' + (x + 15) + '" y="' + (y - 5) + '" text-anchor="middle" font-size="10" style="fill:var(--muted)">' + Math.round(vals[i]) + '</text>' : '') +
+      '<text x="' + (x + 15) + '" y="138" text-anchor="middle" font-size="11" style="fill:var(--muted)">' + esc(lab) + '</text>';
+  }).join("");
+  return '<svg class="bars" viewBox="0 0 300 146" role="img" aria-label="Dépenses des 6 derniers mois">' + bars + '</svg>';
+}
 function viewBud(){
   const list = monthTx(cur).filter(t => t.type !== "inc");
   const by = {};
@@ -394,6 +451,9 @@ function viewBud(){
   };
   return '<div class="top"><h1>Budgets</h1></div>' + monthNav() +
     (withB.length ? '<div class="card"><div class="muted" style="font-size:14px">Budget total du mois</div><div class="big" style="font-size:52px;margin-top:2px">' + money(ts) + '<small style="font-size:22px">/ ' + money(tb) + ' CHF</small></div></div>' : '') +
+    (total > 0 ? '<h2>Répartition<small>' + money(total) + ' CHF</small></h2><div class="chartcard"><div class="donutw">' + donut(rows, total) + '<div class="mid">' + money(total) + '<small>CHF</small></div></div>' +
+      rows.filter(r => r.v > 0).sort((a, b) => b.v - a.v).map(r => '<div class="leg"><i style="background:' + r.c.color + '"></i><span>' + esc(r.c.emoji + " " + r.c.name) + '</span><b>' + money(r.v) + '</b><em>' + Math.round(r.v / total * 100) + ' %</em></div>').join("") + '</div>' : '') +
+    '<h2>6 derniers mois<small>dépenses en CHF</small></h2><div class="chartcard">' + barsChart() + '</div>' +
     '<h2>Par catégorie<small>' + money(total) + ' CHF dépensés</small></h2>' +
     '<div class="list">' + rows.map(row).join("") + '</div>' +
     '<p class="note">Touche une catégorie pour fixer son budget mensuel. La barre devient jaune à 80 % et rouge au-delà de 100 %.</p>';
@@ -404,6 +464,10 @@ function viewMore(){
   return '<div class="top"><h1>Plus</h1></div>' +
     '<h2>Apparence</h2><div class="seg" id="themeSeg">' +
     [["auto", "Comme le téléphone"], ["light", "Clair"], ["dark", "Sombre"]].map(a => '<button data-th="' + a[0] + '" aria-pressed="' + (th === a[0]) + '">' + a[1] + '</button>').join("") + '</div>' +
+    '<h2>Objectifs d\'épargne</h2><div class="list">' +
+    S.goals.map(g => { const left = Math.max(0, Math.round((g.target - g.saved) * 100) / 100), pct = Math.min(100, g.saved / g.target * 100);
+      return '<button class="goal" data-goal="' + esc(g.id) + '"><div class="l"><span>' + esc(g.name) + '</span><span>' + money(g.saved) + ' / ' + money(g.target) + '</span></div><div class="pbar"><i style="width:' + pct + '%;background:var(--green)"></i></div><div class="bsub">' + (left ? 'Encore ' + money(left) + ' CHF' : 'Objectif atteint 🎉') + '</div></button>'; }).join("") +
+    '<button class="row" data-goal="new"><span class="emo" style="background:var(--sunk)">+</span><span class="rname"><b>Nouvel objectif</b></span></button></div>' +
     '<h2>Mon mois commence le</h2><select class="inp" id="sdsel">' + Array.from({length:28}, (_, k) => '<option value="' + (k+1) + '"' + (sd() === k+1 ? " selected" : "") + '>' + (k === 0 ? "1er du mois (calendrier)" : (k+1) + " du mois") + '</option>').join("") + '</select>' +
     '<p class="note">Utile si tu reçois ton argent de poche ou ton salaire un autre jour : les totaux, budgets et mois suivent cette date.</p>' +
     '<h2>Paiements récurrents</h2><div class="list">' +
@@ -413,6 +477,14 @@ function viewMore(){
     '<h2>Catégories</h2><div class="list">' +
     S.cats.map(c => '<button class="row" data-cat="' + esc(c.id) + '"><span class="emo" style="background:' + tint(c.color) + '">' + esc(c.emoji) + '</span><span class="rname"><b>' + esc(c.name) + '</b></span><span class="muted">›</span></button>').join("") +
     '<button class="row" data-cat="new"><span class="emo" style="background:var(--sunk)">+</span><span class="rname"><b>Nouvelle catégorie</b></span></button></div>' +
+    '<h2>Sauvegarde</h2><div class="list">' +
+    '<button class="row" data-act="json"><span class="rname"><b>Exporter une sauvegarde</b><span>Fichier JSON, pour tout restaurer plus tard</span></span><span class="muted">›</span></button>' +
+    '<button class="row" data-act="csv"><span class="rname"><b>Exporter en CSV</b><span>Pour Excel</span></span><span class="muted">›</span></button>' +
+    '<button class="row" data-act="import"><span class="rname"><b>Importer une sauvegarde</b><span>Remplace les données actuelles</span></span><span class="muted">›</span></button></div>' +
+    '<h2>Sécurité</h2><div class="list">' +
+    (S.settings.pin ? '<button class="row" data-act="pinchg"><span class="rname"><b>Changer le code PIN</b></span><span class="muted">›</span></button><button class="row" data-act="pinoff"><span class="rname"><b>Désactiver le code PIN</b></span><span class="muted">›</span></button>'
+      : '<button class="row" data-act="pinon"><span class="rname"><b>Activer un code PIN</b><span>4 chiffres pour ouvrir l\'app</span></span><span class="muted">›</span></button>') + '</div>' +
+    '<p class="note">Le code PIN protège seulement ta vie privée si quelqu\'un prend ton téléphone ouvert : ce n\'est pas une vraie sécurité.</p>' +
     '<p class="note">Toutes tes données restent sur ce téléphone (stockage local). ' + S.tx.length + ' transaction' + (S.tx.length > 1 ? "s" : "") + ' enregistrée' + (S.tx.length > 1 ? "s" : "") + '.</p>';
 }
 
@@ -441,7 +513,11 @@ $("#view").addEventListener("click", e => {
   const rc = e.target.closest("[data-rec]");
   if(rc){ openRec(rc.dataset.rec); return; }
   const bd = e.target.closest("[data-bud]");
-  if(bd) openBud(bd.dataset.bud);
+  if(bd){ openBud(bd.dataset.bud); return; }
+  const gl = e.target.closest("[data-goal]");
+  if(gl){ openGoal(gl.dataset.goal); return; }
+  const ac = e.target.closest("[data-act]");
+  if(ac) act(ac.dataset.act);
 });
 $("#view").addEventListener("input", e => {
   if(e.target.id === "fq"){ filt.q = e.target.value; fillTxList(); }
@@ -551,6 +627,10 @@ $("#sh1").addEventListener("click", e => { if(e.target.id === "sh1") closeTx(); 
 
 /* keyboard: digits, comma, backspace, Enter saves, Escape closes */
 document.addEventListener("keydown", e => {
+  if($("#lock").classList.contains("on")){
+    if(/^[0-9]$/.test(e.key)) lockKey(e.key); else if(e.key === "Backspace") lockKey("⌫"); else if(e.key === "Escape") $("#lcancel").click();
+    return;
+  }
   if(e.key === "Escape"){
     if($("#sh2").classList.contains("on")) closeCat(); else if(F) closeTx();
     return;
@@ -605,7 +685,7 @@ $("#sb2").addEventListener("click", e => {
     save(); closeCat(); render();
   }
 });
-$("#sb2").addEventListener("keydown", e => { if(e.key === "Enter" && e.target.tagName === "INPUT"){ e.preventDefault(); (document.querySelector("#csave,#rsave,#bsave") || {click(){}}).click(); } });
+$("#sb2").addEventListener("keydown", e => { if(e.key === "Enter" && e.target.tagName === "INPUT"){ e.preventDefault(); (document.querySelector("#csave,#rsave,#bsave,#gsave") || {click(){}}).click(); } });
 $("#sh2").addEventListener("click", e => { if(e.target.id === "sh2") closeCat(); });
 
 /* ---------- recurring + budget sheets ---------- */
@@ -681,6 +761,145 @@ $("#sb2").addEventListener("click", e => {
   }
 });
 
+/* ---------- savings goals ---------- */
+let GF = null;
+const num = v => Math.round(parseFloat(String(v).replace(",", ".")) * 100) / 100;
+function openGoal(id){
+  const g = id === "new" ? {id:null, name:"", target:"", saved:0} : S.goals.find(x => x.id === id);
+  if(!g) return;
+  GF = g.id;
+  const left = g.id ? Math.max(0, Math.round((g.target - g.saved) * 100) / 100) : 0;
+  $("#sb2").innerHTML =
+    '<h3>' + (g.id ? esc(g.name) : "Nouvel objectif") + '</h3>' +
+    (g.id ? '<div class="muted" id="gleft" style="margin:-6px 0 6px">' + (left ? "Encore " + money(left) + " CHF" : "Objectif atteint 🎉") + '</div>' +
+      '<span class="fl">Ajouter de l\'argent (CHF)</span><div class="addm"><input class="inp" id="gadd" inputmode="decimal" placeholder="Ex. 20 (ou -20 pour retirer)"><button class="btn" id="gaddbtn">Ajouter</button></div>' : '') +
+    '<span class="fl">Nom</span><input class="inp" id="gname" maxlength="40" placeholder="Ex. Nouveau téléphone" value="' + esc(g.name) + '">' +
+    '<div class="two"><div><span class="fl">Objectif (CHF)</span><input class="inp" id="gtarget" inputmode="decimal" value="' + (g.target ? String(g.target).replace(".", ",") : "") + '"></div>' +
+    '<div><span class="fl">Déjà mis de côté</span><input class="inp" id="gsaved" inputmode="decimal" value="' + String(g.saved).replace(".", ",") + '"></div></div>' +
+    '<div class="sfoot">' + (g.id ? '<button class="btn danger" id="gdel">Supprimer</button>' : '<button class="btn sec" id="gcancel">Annuler</button>') + '<button class="btn" id="gsave">Enregistrer</button></div>';
+  $("#sh2").classList.add("on");
+}
+$("#sb2").addEventListener("click", e => {
+  const b = e.target.closest("button"); if(!b) return;
+  if(b.id === "gcancel") closeCat();
+  else if(b.id === "gsave"){
+    const name = $("#gname").value.trim(), target = num($("#gtarget").value), saved = num($("#gsaved").value || 0);
+    if(!name){ $("#gname").focus(); return; }
+    if(!(target > 0)){ $("#gtarget").focus(); return; }
+    const rec = {name, target, saved: saved >= 0 ? saved : 0};
+    if(GF) Object.assign(S.goals.find(x => x.id === GF), rec); else S.goals.push(Object.assign({id:uid()}, rec));
+    save(); closeCat(); render();
+  }
+  else if(b.id === "gdel"){
+    const i = S.goals.findIndex(x => x.id === GF); if(i < 0) return;
+    const g = S.goals.splice(i, 1)[0];
+    save(); closeCat(); render();
+    toast("Objectif supprimé", () => { S.goals.push(g); save(); render(); });
+  }
+  else if(b.id === "gaddbtn"){
+    const v = num($("#gadd").value);
+    if(!v){ $("#gadd").focus(); return; }
+    const g = S.goals.find(x => x.id === GF);
+    g.saved = Math.max(0, Math.round((g.saved + v) * 100) / 100);
+    save(); render();
+    $("#gsaved").value = String(g.saved).replace(".", ","); $("#gadd").value = "";
+    const left = Math.max(0, Math.round((g.target - g.saved) * 100) / 100);
+    $("#gleft").textContent = left ? "Encore " + money(left) + " CHF" : "Objectif atteint 🎉";
+    toast(v > 0 ? "+" + money(v) + " CHF" : money(v) + " CHF");
+  }
+});
+
+/* ---------- export / import ---------- */
+function download(name, text, mime){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], {type:mime})); a.download = name;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+}
+function exportJson(){
+  const d = JSON.parse(JSON.stringify(S)); d.settings.pin = ""; // the PIN stays on this phone
+  download("budget-" + today() + ".json", JSON.stringify(d, null, 1), "application/json");
+  toast("Sauvegarde exportée");
+}
+function exportCsv(){
+  const q = v => '"' + String(v).replace(/"/g, '""') + '"';
+  const safe = v => /^[=+\-@\t\r]/.test(v) ? "'" + v : v; // stops Excel from running a note as a formula
+  const lines = [["Date", "Type", "Catégorie", "Montant (CHF)", "Moyen", "Note"].map(q).join(";")];
+  for(const t of sortTx(S.tx.slice()).reverse()){
+    const amt = (t.type === "inc" ? 1 : -1) * t.amount;
+    lines.push([t.date, t.type === "inc" ? "Revenu" : "Dépense", catOf(t.cat).name, String(amt).replace(".", ","), methodName(t.method), safe(t.note || "")].map(q).join(";"));
+  }
+  download("budget-" + today() + ".csv", "\ufeff" + lines.join("\r\n"), "text/csv;charset=utf-8");
+  toast("CSV exporté");
+}
+$("#impfile").addEventListener("change", e => {
+  const f = e.target.files[0]; e.target.value = "";
+  if(!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    let d;
+    try{ d = JSON.parse(r.result); }catch(x){ d = null; }
+    if(!d || typeof d !== "object" || !Array.isArray(d.tx) || !Array.isArray(d.cats)){ toast("Ce fichier n'est pas une sauvegarde Budget"); return; }
+    if(!confirm("Remplacer tes données actuelles (" + S.tx.length + " transactions) par la sauvegarde (" + d.tx.length + " transactions) ?")) return;
+    const pin = S.settings.pin;
+    d.tx = d.tx.filter(t => t && typeof t.date === "string" && t.amount > 0);
+    S = migrate(d); S.settings.pin = pin;
+    save(); applyTheme(); cur = curYm(); render(); toast("Sauvegarde importée");
+  };
+  r.readAsText(f);
+});
+
+/* ---------- PIN ---------- */
+const hashPin = p => { let h = 5381; for(const c of "bgt" + p) h = ((h << 5) + h + c.charCodeAt(0)) | 0; return String(h); };
+let LM = null, LB = "";
+function showLock(mode, cb){
+  LM = {mode, cb, first:""}; LB = "";
+  $("#lpad").innerHTML = ["1","2","3","4","5","6","7","8","9","","0","⌫"].map(k => '<button data-lk="' + k + '"' + (k ? "" : " disabled") + ' aria-label="' + (k === "⌫" ? "Effacer" : k) + '">' + k + '</button>').join("");
+  $("#lcancel").style.display = mode === "unlock" ? "none" : "block";
+  drawLock(); $("#lock").classList.add("on");
+}
+function drawLock(){
+  $("#lt").textContent = LM.mode === "set" ? (LM.first ? "Confirme le code" : "Nouveau code") : LM.mode === "check" ? "Code actuel" : "Code PIN";
+  document.querySelectorAll("#ldots i").forEach((d, i) => d.classList.toggle("on", i < LB.length));
+}
+function lockKey(k){
+  if(k === "⌫") LB = LB.slice(0, -1); else if(LB.length < 4) LB += k;
+  drawLock();
+  if(LB.length === 4) setTimeout(lockSubmit, 120);
+}
+function lockFail(){
+  const el = $("#ldots"); el.classList.remove("shake"); void el.offsetWidth; el.classList.add("shake");
+  LB = ""; drawLock();
+}
+function lockSubmit(){
+  if(!LM || LB.length < 4) return;
+  const m = LM.mode;
+  if(m === "unlock" || m === "check"){
+    if(hashPin(LB) !== S.settings.pin) return lockFail();
+    const cb = LM.cb; $("#lock").classList.remove("on"); LM = null; if(cb) cb();
+  } else if(!LM.first){ LM.first = LB; LB = ""; drawLock(); }
+  else if(LM.first === LB){ S.settings.pin = hashPin(LB); save(); $("#lock").classList.remove("on"); LM = null; render(); toast("Code PIN activé"); }
+  else { LM.first = ""; lockFail(); toast("Les deux codes sont différents"); }
+}
+$("#lpad").addEventListener("click", e => { const b = e.target.closest("[data-lk]"); if(b && b.dataset.lk) lockKey(b.dataset.lk); });
+$("#lcancel").onclick = () => { $("#lock").classList.remove("on"); LM = null; };
+function act(a){
+  if(a === "json") exportJson();
+  else if(a === "csv") exportCsv();
+  else if(a === "import") $("#impfile").click();
+  else if(a === "pinon") showLock("set");
+  else if(a === "pinchg") showLock("check", () => showLock("set"));
+  else if(a === "pinoff") showLock("check", () => { S.settings.pin = ""; save(); render(); toast("Code PIN désactivé"); });
+}
+let hiddenAt = 0;
+document.addEventListener("visibilitychange", () => {
+  if(document.hidden){ hiddenAt = Date.now(); return; }
+  if(S.settings.pin && Date.now() - hiddenAt > 15000 && !$("#lock").classList.contains("on")){
+    document.querySelectorAll(".sheet.on").forEach(x => x.classList.remove("on")); F = null; CF = RF = null;
+    showLock("unlock");
+  }
+});
+
 /* ---------- start ---------- */
 applyTheme();
 function autoRec(){
@@ -689,6 +908,7 @@ function autoRec(){
 }
 autoRec();
 render();
+if(S.settings.pin) showLock("unlock");
 document.addEventListener("visibilitychange", () => { if(!document.hidden && !F) autoRec(); });
 if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>
